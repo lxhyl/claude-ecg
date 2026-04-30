@@ -1,0 +1,19 @@
+{
+  "hooks": {
+    "SessionStart":      [{ "hooks": [{ "type": "command", "command": "curl -s -X POST 'http://localhost:7823/heartbeat?e=SessionStart' >/dev/null 2>&1 || true" }] }],
+    "SessionEnd":        [{ "hooks": [{ "type": "command", "command": "curl -s -X POST 'http://localhost:7823/heartbeat?e=SessionEnd' >/dev/null 2>&1 || true" }] }],
+    "UserPromptSubmit":  [{ "hooks": [{ "type": "command", "command": "curl -s -X POST 'http://localhost:7823/heartbeat?e=UserPromptSubmit' >/dev/null 2>&1 || true" }] }],
+    "PreToolUse":        [{ "hooks": [{ "type": "command", "command": "curl -s -X POST 'http://localhost:7823/heartbeat?e=PreToolUse' >/dev/null 2>&1 || true" }] }],
+    "PostToolUse":       [{ "hooks": [{ "type": "command", "command": "curl -s -X POST 'http://localhost:7823/heartbeat?e=PostToolUse' >/dev/null 2>&1 || true" }] }],
+    "PostToolUseFailure":[{ "hooks": [{ "type": "command", "command": "curl -s -X POST 'http://localhost:7823/heartbeat?e=PostToolUseFailure' >/dev/null 2>&1 || true" }] }],
+    "SubagentStart":     [{ "hooks": [{ "type": "command", "command": "curl -s -X POST 'http://localhost:7823/heartbeat?e=SubagentStart' >/dev/null 2>&1 || true" }] }],
+    "SubagentStop":      [{ "hooks": [{ "type": "command", "command": "curl -s -X POST 'http://localhost:7823/heartbeat?e=SubagentStop' >/dev/null 2>&1 || true" }] }],
+    "Notification":      [{ "hooks": [{ "type": "command", "command": "curl -s -X POST 'http://localhost:7823/heartbeat?e=Notification' >/dev/null 2>&1 || true" }] }],
+    "PermissionRequest": [{ "hooks": [{ "type": "command", "command": "curl -s -X POST 'http://localhost:7823/heartbeat?e=PermissionRequest' >/dev/null 2>&1 || true" }] }],
+    "PermissionDenied":  [{ "hooks": [{ "type": "command", "command": "curl -s -X POST 'http://localhost:7823/heartbeat?e=PermissionDenied' >/dev/null 2>&1 || true" }] }],
+    "PreCompact":        [{ "hooks": [{ "type": "command", "command": "curl -s -X POST 'http://localhost:7823/heartbeat?e=PreCompact' >/dev/null 2>&1 || true" }] }],
+    "PostCompact":       [{ "hooks": [{ "type": "command", "command": "curl -s -X POST 'http://localhost:7823/heartbeat?e=PostCompact' >/dev/null 2>&1 || true" }] }],
+    "Stop":              [{ "hooks": [{ "type": "command", "command": "curl -s -X POST 'http://localhost:7823/heartbeat?e=Stop' >/dev/null 2>&1 || true" }] }],
+    "StopFailure":       [{ "hooks": [{ "type": "command", "command": "curl -s -X POST 'http://localhost:7823/heartbeat?e=StopFailure' >/dev/null 2>&1 || true" }] }]
+  }
+}

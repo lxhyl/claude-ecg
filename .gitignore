@@ -1,0 +1,9 @@
+.build/
+.swiftpm/
+Package.resolved
+*.xcodeproj
+*.xcworkspace
+.DS_Store
+
+# Claude Code session-local state (per-machine permission allowlist)
+.claude/settings.local.json
