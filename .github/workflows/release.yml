@@ -34,12 +34,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          cat > /tmp/release-notes.md <<'EOF'
+          The app is ad-hoc signed (no Apple Developer ID), so macOS quarantines
+          the download. After moving ECGBar.app to /Applications, either
+          right-click → Open and confirm, or run:
+
+          ```
+          xattr -dr com.apple.quarantine /Applications/ECGBar.app
+          ```
+          EOF
           gh release create "${GITHUB_REF_NAME}" \
             "build/ECGBar-${GITHUB_REF_NAME}.zip" \
             --title "ECGBar ${GITHUB_REF_NAME}" \
             --generate-notes \
-            --notes "The app is ad-hoc signed (no Apple Developer ID), so macOS quarantines the download. After moving ECGBar.app to /Applications, either right-click → Open and confirm, or run:
-
-\`\`\`
-xattr -dr com.apple.quarantine /Applications/ECGBar.app
-\`\`\`"
+            --notes-file /tmp/release-notes.md
