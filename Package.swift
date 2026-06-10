@@ -8,6 +8,11 @@ let package = Package(
         .executableTarget(
             name: "ECGBar",
             path: "Sources/ECGBar"
+        ),
+        .testTarget(
+            name: "ECGBarTests",
+            dependencies: ["ECGBar"],
+            path: "Tests/ECGBarTests"
         )
     ]
 )

@@ -1,8 +1,21 @@
 import Foundation
 
+/// Routes incoming hook events to waveform, sound, and state transitions.
+///
+/// States: `idle → active ⇄ attention`, then `Stop`/`StopFailure` arms a grace
+/// timer (`armed`); if nothing else arrives the trace flatlines with an alarm
+/// and settles back to `idle`.
 final class HeartbeatEngine {
-    let view: ECGView
-    let audio: AudioPlayer
+    /// Grace period after Stop/StopFailure; any new event within it cancels the alarm.
+    static let armGracePeriod: TimeInterval = 3.0
+    /// Cadence of the soft "resting rate" filler beat while a long tool call runs.
+    static let fillerInterval: TimeInterval = 2.0
+    /// With no events at all for this long, give up and go quietly idle (no alarm) —
+    /// covers sessions that die without ever sending Stop/SessionEnd.
+    static let activityTimeout: TimeInterval = 600
+
+    private let view: ECGView
+    private let audio: AudioPlayer
 
     var onChange: (() -> Void)?
 
@@ -13,27 +26,38 @@ final class HeartbeatEngine {
     private var armTimer: Timer?
     private var idleTimer: Timer?
     private var fillerTimer: Timer?
-    private let armInterval: TimeInterval = 3.0
-    private let fillerInterval: TimeInterval = 2.0
+
     init(view: ECGView, audio: AudioPlayer) {
         self.view = view
         self.audio = audio
-        fillerTimer = Timer.scheduledTimer(withTimeInterval: fillerInterval, repeats: true) { [weak self] _ in
+        fillerTimer = Timer.commonModeTimer(interval: Self.fillerInterval, tolerance: 0.25) { [weak self] _ in
             self?.tickFiller()
+        }
+    }
+
+    deinit {
+        armTimer?.invalidate()
+        idleTimer?.invalidate()
+        fillerTimer?.invalidate()
+    }
+
+    /// Thread-safe entry point — the hook server calls this from its own queue.
+    func recordBeat(event: String) {
+        DispatchQueue.main.async { [weak self] in
+            self?.handle(event: event)
         }
     }
 
     private func tickFiller() {
         guard state == .active || state == .attention else { return }
-        let last = lastEventDate ?? .distantPast
-        if Date().timeIntervalSince(last) >= fillerInterval {
-            view.enqueueBeat(style: .soft)
+        let sinceLast = Date().timeIntervalSince(lastEventDate ?? .distantPast)
+        if state == .active && sinceLast >= Self.activityTimeout {
+            transition(to: .idle)
+            onChange?()
+            return
         }
-    }
-
-    func recordBeat(event: String) {
-        DispatchQueue.main.async { [weak self] in
-            self?.handle(event: event)
+        if sinceLast >= Self.fillerInterval {
+            view.enqueueBeat(style: .soft)
         }
     }
 
@@ -43,42 +67,27 @@ final class HeartbeatEngine {
         armTimer?.invalidate(); armTimer = nil
         idleTimer?.invalidate(); idleTimer = nil
 
-        switch event {
-        case "Stop":
-            view.enqueueBeat(style: .normal)
-            audio.playBeat()
-            transition(to: .armed)
-            armTimer = Timer.scheduledTimer(withTimeInterval: armInterval, repeats: false) { [weak self] _ in
-                self?.fireFlatline()
-            }
+        let beat = BeatKind(event: event)
+        view.enqueueBeat(style: beat.waveform)
 
-        case "StopFailure":
-            view.enqueueBeat(style: .inverted)
-            audio.playArrhythmia()
-            transition(to: .armed)
-            armTimer = Timer.scheduledTimer(withTimeInterval: armInterval, repeats: false) { [weak self] _ in
-                self?.fireFlatline()
-            }
+        switch beat.sound {
+        case .blip:    audio.playBeat()
+        case .lowTone: audio.playArrhythmia()
+        case .chime:   audio.playAttention()
+        }
 
-        case "SessionEnd":
-            view.enqueueBeat(style: .normal)
-            audio.playBeat()
-            fireFlatline()
-
-        case "PostToolUseFailure", "PermissionDenied":
-            view.enqueueBeat(style: .inverted)
-            audio.playArrhythmia()
+        switch beat.consequence {
+        case .stayActive:
             transition(to: .active)
-
-        case "Notification", "PermissionRequest":
-            view.enqueueBeat(style: .doublet)
-            audio.playAttention()
+        case .demandAttention:
             transition(to: .attention)
-
-        default:
-            view.enqueueBeat(style: .normal)
-            audio.playBeat()
-            transition(to: .active)
+        case .armFlatline:
+            transition(to: .armed)
+            armTimer = Timer.commonModeTimer(interval: Self.armGracePeriod, repeats: false) { [weak self] _ in
+                self?.fireFlatline()
+            }
+        case .flatlineNow:
+            fireFlatline()
         }
         onChange?()
     }
@@ -86,7 +95,7 @@ final class HeartbeatEngine {
     private func fireFlatline() {
         transition(to: .flatlining)
         audio.playAlarm()
-        idleTimer = Timer.scheduledTimer(withTimeInterval: 2.7, repeats: false) { [weak self] _ in
+        idleTimer = Timer.commonModeTimer(interval: AudioPlayer.alarmDuration + 0.2, repeats: false) { [weak self] _ in
             self?.transition(to: .idle)
             self?.onChange?()
         }

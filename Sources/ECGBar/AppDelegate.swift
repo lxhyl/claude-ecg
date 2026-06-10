@@ -1,6 +1,9 @@
 import AppKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    private static let statusItemWidth: CGFloat = 110
+    private static let menuRefreshInterval: TimeInterval = 1.0
+
     private var statusItem: NSStatusItem!
     private var ecgView: ECGView!
     private var audio: AudioPlayer!
@@ -11,32 +14,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastEventLine: NSMenuItem!
     private var muteBeatItem: NSMenuItem!
     private var muteAlarmItem: NSMenuItem!
-    private var refreshTimer: Timer?
+    /// Keeps the "Last beat: Xs ago" line ticking — only runs while the menu is open.
+    private var menuRefreshTimer: Timer?
 
-    private static let hooksSnippet: String = {
-        let events = [
-            "SessionStart", "SessionEnd",
-            "UserPromptSubmit",
-            "PreToolUse", "PostToolUse", "PostToolUseFailure",
-            "SubagentStart", "SubagentStop",
-            "Notification", "PermissionRequest", "PermissionDenied",
-            "PreCompact", "PostCompact",
-            "Stop", "StopFailure"
-        ]
-        let entries = events.map { e in
-            "    \"\(e)\": [{ \"hooks\": [{ \"type\": \"command\", \"command\": \"curl -s -X POST 'http://localhost:7823/heartbeat?e=\(e)' >/dev/null 2>&1 || true\" }] }]"
-        }
-        return "{\n  \"hooks\": {\n" + entries.joined(separator: ",\n") + "\n  }\n}\n"
-    }()
+    private let port = AppConfig.port
+    private lazy var hooksSnippet = HooksSnippet.render(port: port)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         audio = AudioPlayer()
-        audio.muteBeat = UserDefaults.standard.bool(forKey: "muteBeat")
-        audio.muteAlarm = UserDefaults.standard.bool(forKey: "muteAlarm")
+        audio.muteBeat = UserDefaults.standard.bool(forKey: AppConfig.DefaultsKey.muteBeat)
+        audio.muteAlarm = UserDefaults.standard.bool(forKey: AppConfig.DefaultsKey.muteAlarm)
 
-        statusItem = NSStatusBar.system.statusItem(withLength: 110)
-        guard let button = statusItem.button else { return }
-        button.title = ""
+        statusItem = NSStatusBar.system.statusItem(withLength: Self.statusItemWidth)
+        guard let button = statusItem.button else {
+            NSLog("ECGBar: no status item button available; quitting")
+            NSApp.terminate(nil)
+            return
+        }
+        button.toolTip = "ECGBar — Claude Code activity"
         ecgView = ECGView(frame: button.bounds)
         ecgView.autoresizingMask = [.width, .height]
         button.addSubview(ecgView)
@@ -46,29 +41,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusItem.menu = buildMenu()
         updateMenuLines()
+        startServer()
+    }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        server?.stop()
+    }
+
+    private func startServer() {
         server = HookServer { [weak self] event in
             self?.engine.recordBeat(event: event)
         }
         do {
-            try server.start()
+            try server.start(port: port) { [weak self] error in
+                self?.presentServerFailure(error)
+            }
         } catch {
-            NSLog("ECGBar: hook server failed to start on 7823: \(error)")
-            let alert = NSAlert()
-            alert.messageText = "ECGBar couldn't bind port 7823"
-            alert.informativeText = "Another process is using the port. Quit that process and relaunch ECGBar.\n\n\(error.localizedDescription)"
-            alert.runModal()
+            presentServerFailure(error)
         }
+    }
 
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            self?.updateMenuLines()
-        }
+    private func presentServerFailure(_ error: Error) {
+        NSLog("ECGBar: hook server failed to start on \(port): \(error)")
+        let alert = NSAlert()
+        alert.messageText = "ECGBar couldn't listen on port \(port)"
+        alert.informativeText = "Another process is probably using the port. Quit it and relaunch ECGBar, or pick a different port (see README → Configuration).\n\n\(error.localizedDescription)"
+        alert.runModal()
     }
 
     private func buildMenu() -> NSMenu {
         let menu = NSMenu()
+        menu.delegate = self
 
-        let header = NSMenuItem(title: "ECG Bar", action: nil, keyEquivalent: "")
+        let header = NSMenuItem(title: "ECG Bar v\(AppConfig.version)", action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
 
@@ -108,13 +113,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
+        let github = NSMenuItem(title: "ECGBar on GitHub", action: #selector(openRepository), keyEquivalent: "")
+        github.target = self
+        menu.addItem(github)
+
         let quit = NSMenuItem(title: "Quit ECG Bar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quit)
 
         return menu
     }
 
+    // MARK: - NSMenuDelegate
+
+    func menuWillOpen(_ menu: NSMenu) {
+        updateMenuLines()
+        menuRefreshTimer = Timer.commonModeTimer(interval: Self.menuRefreshInterval, tolerance: 0.1) { [weak self] _ in
+            self?.updateMenuLines()
+        }
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        menuRefreshTimer?.invalidate()
+        menuRefreshTimer = nil
+    }
+
     private func updateMenuLines() {
+        guard statusLine != nil else { return }
         let stateName: String
         switch engine.state {
         case .idle:        stateName = "Idle"
@@ -132,16 +156,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: - Actions
+
     @objc private func toggleMuteBeat() {
         audio.muteBeat.toggle()
         muteBeatItem.state = audio.muteBeat ? .on : .off
-        UserDefaults.standard.set(audio.muteBeat, forKey: "muteBeat")
+        UserDefaults.standard.set(audio.muteBeat, forKey: AppConfig.DefaultsKey.muteBeat)
     }
 
     @objc private func toggleMuteAlarm() {
         audio.muteAlarm.toggle()
         muteAlarmItem.state = audio.muteAlarm ? .on : .off
-        UserDefaults.standard.set(audio.muteAlarm, forKey: "muteAlarm")
+        UserDefaults.standard.set(audio.muteAlarm, forKey: AppConfig.DefaultsKey.muteAlarm)
     }
 
     @objc private func sendTestBeat() {
@@ -153,6 +179,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
+    @objc private func openRepository() {
+        NSWorkspace.shared.open(AppConfig.repositoryURL)
+    }
+
     @objc private func showHooks() {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
@@ -160,7 +190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.informativeText = "Merge the \"hooks\" object below into your existing settings.json. Existing /refresh entries continue to work — the server treats them as heartbeats."
 
         let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 560, height: 280))
-        textView.string = Self.hooksSnippet
+        textView.string = hooksSnippet
         textView.isEditable = false
         textView.isSelectable = true
         textView.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
@@ -175,7 +205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "Close")
         if alert.runModal() == .alertFirstButtonReturn {
             NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(Self.hooksSnippet, forType: .string)
+            NSPasteboard.general.setString(hooksSnippet, forType: .string)
         }
     }
 }

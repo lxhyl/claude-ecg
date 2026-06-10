@@ -1,15 +1,26 @@
 import AppKit
 
+/// Scrolling ECG trace drawn inside the status-item button.
+///
+/// New samples feed in from the right edge at 60 Hz. The render ticker pauses
+/// automatically once the trace has fully flattened, so an idle ECGBar costs
+/// no CPU; the next beat restarts it.
 final class ECGView: NSView {
     enum State { case idle, active, attention, armed, flatlining }
     enum BeatStyle { case normal, soft, inverted, doublet }
 
     var state: State = .idle { didSet { needsDisplay = true } }
 
+    private static let frameInterval: TimeInterval = 1.0 / 60.0
+
     private var samples: [CGFloat] = []
     private var pulseQueue: [CGFloat] = []
     private var ticker: Timer?
+    /// Consecutive ticks that appended a zero sample with an empty queue.
+    /// Once it reaches the buffer width, every sample is zero and we can stop drawing.
+    private var flatTicks = 0
 
+    /// One heartbeat, sample-by-sample: P wave, PQ segment, QRS complex, ST segment, T wave.
     private static let pulseTemplate: [CGFloat] = {
         let p:     [CGFloat] = [0.00, 0.05, 0.10, 0.05, 0.00]
         let pq:    [CGFloat] = [0.00, 0.00]
@@ -25,33 +36,40 @@ final class ECGView: NSView {
         super.init(frame: frame)
         wantsLayer = true
         ensureBufferSize()
-        ticker = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-            self?.tick()
-        }
     }
 
-    required init?(coder: NSCoder) { fatalError("not used") }
+    required init?(coder: NSCoder) { fatalError("ECGView is created in code only") }
 
     deinit { ticker?.invalidate() }
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         ensureBufferSize()
+        needsDisplay = true
     }
 
     func enqueueBeat(style: BeatStyle = .normal) {
-        let t = Self.pulseTemplate
+        let template = Self.pulseTemplate
         switch style {
         case .normal:
-            pulseQueue.append(contentsOf: t)
+            pulseQueue.append(contentsOf: template)
         case .soft:
-            pulseQueue.append(contentsOf: t.map { $0 * 0.45 })
+            pulseQueue.append(contentsOf: template.map { $0 * 0.45 })
         case .inverted:
-            pulseQueue.append(contentsOf: t.map { -$0 })
+            pulseQueue.append(contentsOf: template.map { -$0 })
         case .doublet:
-            pulseQueue.append(contentsOf: t)
+            pulseQueue.append(contentsOf: template)
             pulseQueue.append(contentsOf: [0, 0, 0])
-            pulseQueue.append(contentsOf: t)
+            pulseQueue.append(contentsOf: template)
+        }
+        startTicker()
+    }
+
+    private func startTicker() {
+        guard ticker == nil else { return }
+        flatTicks = 0
+        ticker = Timer.commonModeTimer(interval: Self.frameInterval, tolerance: Self.frameInterval / 4) { [weak self] _ in
+            self?.tick()
         }
     }
 
@@ -70,6 +88,16 @@ final class ECGView: NSView {
             samples.append(next)
         }
         needsDisplay = true
+
+        if next == 0 && pulseQueue.isEmpty {
+            flatTicks += 1
+            if flatTicks >= samples.count {
+                ticker?.invalidate()
+                ticker = nil
+            }
+        } else {
+            flatTicks = 0
+        }
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -85,12 +113,11 @@ final class ECGView: NSView {
         path.lineCapStyle = .round
 
         for (i, v) in samples.enumerated() {
-            let x = CGFloat(i)
-            let y = mid + v * amplitude
+            let point = CGPoint(x: CGFloat(i), y: mid + v * amplitude)
             if i == 0 {
-                path.move(to: CGPoint(x: x, y: y))
+                path.move(to: point)
             } else {
-                path.line(to: CGPoint(x: x, y: y))
+                path.line(to: point)
             }
         }
 
